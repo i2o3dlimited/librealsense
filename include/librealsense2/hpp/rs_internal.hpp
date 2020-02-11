@@ -41,11 +41,12 @@ namespace rs2
         * \param[in] filename string of the name of the file
         */
         mock_context(const std::string& filename,
-                     const std::string& section = "")
+                     const std::string& section = "",
+                     const std::string& min_api_version = "0.0.0")
         {
             rs2_error* e = nullptr;
             _context = std::shared_ptr<rs2_context>(
-                rs2_create_mock_context(RS2_API_VERSION, filename.c_str(), section.c_str(), &e),
+                rs2_create_mock_context_versioned(RS2_API_VERSION, filename.c_str(), section.c_str(), min_api_version.c_str(), &e),
                 rs2_delete_context);
             error::handle(e);
         }
@@ -88,7 +89,37 @@ namespace rs2
         }
 
         /**
-        * Inject frame into the sensor
+        * Add motion stream to software sensor
+        *
+        * \param[in] motion   all the parameters that required to defind motion stream
+        */
+        stream_profile add_motion_stream(rs2_motion_stream motion_stream)
+        {
+            rs2_error* e = nullptr;
+
+            stream_profile stream(rs2_software_sensor_add_motion_stream(_sensor.get(), motion_stream, &e));
+            error::handle(e);
+
+            return stream;
+        }
+
+        /**
+        * Add pose stream to software sensor
+        *
+        * \param[in] pose   all the parameters that required to defind pose stream
+        */
+        stream_profile add_pose_stream(rs2_pose_stream pose_stream)
+        {
+            rs2_error* e = nullptr;
+
+            stream_profile stream(rs2_software_sensor_add_pose_stream(_sensor.get(), pose_stream, &e));
+            error::handle(e);
+
+            return stream;
+        }
+
+        /**
+        * Inject video frame into the sensor
         *
         * \param[in] frame   all the parameters that required to define video frame
         */
@@ -96,6 +127,42 @@ namespace rs2
         {
             rs2_error* e = nullptr;
             rs2_software_sensor_on_video_frame(_sensor.get(), frame, &e);
+            error::handle(e);
+        }
+
+        /**
+        * Inject motion frame into the sensor
+        *
+        * \param[in] frame   all the parameters that required to define motion frame
+        */
+        void on_motion_frame(rs2_software_motion_frame frame)
+        {
+            rs2_error* e = nullptr;
+            rs2_software_sensor_on_motion_frame(_sensor.get(), frame, &e);
+            error::handle(e);
+        }
+
+        /**
+        * Inject pose frame into the sensor
+        *
+        * \param[in] frame   all the parameters that required to define pose frame
+        */
+        void on_pose_frame(rs2_software_pose_frame frame)
+        {
+            rs2_error* e = nullptr;
+            rs2_software_sensor_on_pose_frame(_sensor.get(), frame, &e);
+            error::handle(e);
+        }
+
+        /**
+        * Set frame metadata for the upcoming frames
+        * \param[in] value metadata key to set
+        * \param[in] type metadata value
+        */
+        void set_metadata(rs2_frame_metadata_value value, rs2_metadata_type type)
+        {
+            rs2_error* e = nullptr;
+            rs2_software_sensor_set_metadata(_sensor.get(), value, type, &e);
             error::handle(e);
         }
 
@@ -171,6 +238,21 @@ namespace rs2
             error::handle(e);
 
             return software_sensor(sensor);
+        }
+        
+        /**
+        * Add software device to existing context
+        * Any future queries on the context
+        * Will return this device
+        * This operation cannot be undone (except for destroying the context)
+        *
+        * \param[in] ctx   context to add the device to
+        */
+        void add_to(context& ctx)
+        {
+            rs2_error* e = nullptr;
+            rs2_context_add_software_device(ctx._context.get(), _dev.get(), &e);
+            error::handle(e);
         }
 
         /**

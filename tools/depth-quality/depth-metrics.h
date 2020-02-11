@@ -50,6 +50,7 @@ namespace rs2
             const int ground_thruth_mm,
             const bool plane_fit,
             const float plane_fit_to_ground_truth_mm,
+            const float distance_mm,
             bool record,
             std::vector<single_metric_data>& samples)>;
 
@@ -58,6 +59,7 @@ namespace rs2
             return{ normal.x, normal.y, normal.z, -(normal.x*point.x + normal.y*point.y + normal.z*point.z) };
         }
 
+        //Based on: http://www.ilikebigbits.com/blog/2015/3/2/plane-from-points
         inline plane plane_from_points(const std::vector<rs2::float3> points)
         {
             if (points.size() < 3) throw std::runtime_error("Not enough points to calculate plane");
@@ -118,14 +120,14 @@ namespace rs2
         inline float3 approximate_intersection(const plane& p, const rs2_intrinsics* intrin, float x, float y, float min, float max)
         {
             float3 point;
-            auto far = evaluate_pixel(p, intrin, x, y, max, point);
+            auto f = evaluate_pixel(p, intrin, x, y, max, point);
             if (fabs(max - min) < 1e-3) return point;
-            auto near = evaluate_pixel(p, intrin, x, y, min, point);
-            if (far*near > 0) return{ 0, 0, 0 };
+            auto n = evaluate_pixel(p, intrin, x, y, min, point);
+            if (f*n > 0) return{ 0, 0, 0 };
 
             auto avg = (max + min) / 2;
             auto mid = evaluate_pixel(p, intrin, x, y, avg, point);
-            if (mid*near < 0) return approximate_intersection(p, intrin, x, y, min, avg);
+            if (mid*n < 0) return approximate_intersection(p, intrin, x, y, min, avg);
             return approximate_intersection(p, intrin, x, y, avg, max);
         }
 
@@ -203,7 +205,7 @@ namespace rs2
             result.angle = static_cast<float>(std::acos(std::abs(p.c)) / M_PI * 180.);
 
             callback(roi_pixels, p, roi, baseline_mm, intrin->fx, ground_truth_mm, plane_fit_present,
-                plane_fit_to_gt_offset_mm, record, samples);
+                plane_fit_to_gt_offset_mm, result.distance, record, samples);
 
             // Calculate normal
             auto n = float3{ p.a, p.b, p.c };

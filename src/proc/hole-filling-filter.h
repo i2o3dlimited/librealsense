@@ -13,13 +13,14 @@ namespace librealsense
         hf_max_value
     };
 
-    class hole_filling_filter : public processing_block
+    class hole_filling_filter : public depth_processing_block
     {
     public:
         hole_filling_filter();
 
     protected:
-        void    update_configuration(const rs2::frame& f);
+        void update_configuration(const rs2::frame& f);
+        rs2::frame process_frame(const rs2::frame_source& source, const rs2::frame& f) override;
 
         rs2::frame prepare_target_frame(const rs2::frame& f, const rs2::frame_source& source);
 
@@ -165,4 +166,5 @@ namespace librealsense
         rs2::stream_profile     _target_stream_profile;
         uint8_t                 _hole_filling_mode;
     };
+    MAP_EXTENSION(RS2_EXTENSION_HOLE_FILLING_FILTER, librealsense::hole_filling_filter);
 }

@@ -14,73 +14,122 @@ namespace librealsense
     class archive_interface;
     class md_attribute_parser_base;
     class frame;
-}
 
-struct frame_additional_data
-{
-    rs2_time_t timestamp = 0;
-    unsigned long long frame_number = 0;
-    rs2_timestamp_domain timestamp_domain = RS2_TIMESTAMP_DOMAIN_HARDWARE_CLOCK;
-    rs2_time_t      system_time = 0;
-    rs2_time_t      frame_callback_started = 0;
-    uint32_t        metadata_size = 0;
-    bool            fisheye_ae_mode = false;
-    std::array<uint8_t,MAX_META_DATA_SIZE> metadata_blob;
-    rs2_time_t      backend_timestamp = 0;
-    rs2_time_t last_timestamp = 0;
-    unsigned long long last_frame_number = 0;
-
-    frame_additional_data() {};
-
-    frame_additional_data(double in_timestamp,
-        unsigned long long in_frame_number,
-        double in_system_time,
-        uint8_t md_size,
-        const uint8_t* md_buf,
-        double backend_time,
-        rs2_time_t last_timestamp,
-        unsigned long long last_frame_number)
-        : timestamp(in_timestamp),
-          frame_number(in_frame_number),
-          system_time(in_system_time),
-          metadata_size(md_size),
-          backend_timestamp(backend_time),
-          last_timestamp(last_timestamp),
-          last_frame_number(last_frame_number)
-    {
-        // Copy up to 255 bytes to preserve metadata as raw data
-        if (metadata_size)
-            std::copy(md_buf,md_buf+ std::min(md_size,MAX_META_DATA_SIZE),metadata_blob.begin());
-    }
-};
-
-namespace librealsense
-{
     typedef std::map<rs2_frame_metadata_value, std::shared_ptr<md_attribute_parser_base>> metadata_parser_map;
 
+    /*
+        Each frame is attached with a static header
+        This is a quick and dirty way to manage things like timestamp,
+        frame-number, metadata, etc... Things shared between all frame extensions
+        The point of this class is to be **fixed-sized**, avoiding per frame allocations
+    */
+    struct frame_additional_data
+    {
+        rs2_time_t          timestamp = 0;
+        unsigned long long  frame_number = 0;
+        rs2_timestamp_domain timestamp_domain = RS2_TIMESTAMP_DOMAIN_HARDWARE_CLOCK;
+        rs2_time_t          system_time = 0; // sys-clock at the time the frame was received from the backend
+        rs2_time_t          frame_callback_started = 0; // time when the frame was sent to user callback
+        uint32_t            metadata_size = 0;
+        bool                fisheye_ae_mode = false; // TODO: remove in future release
+        std::array<uint8_t, MAX_META_DATA_SIZE> metadata_blob;
+        rs2_time_t          backend_timestamp = 0; // time when the frame arrived to the backend (OS dependent)
+        rs2_time_t          last_timestamp = 0;
+        unsigned long long  last_frame_number = 0;
+        bool                is_blocking = false; // when running from recording, this bit indicates 
+                                                 // if the recorder was configured to realtime mode or not
+                                                 // if true, this will force any queue receiving this frame not to drop it
+
+        frame_additional_data() {};
+
+        frame_additional_data(double in_timestamp,
+            unsigned long long in_frame_number,
+            double in_system_time,
+            uint8_t md_size,
+            const uint8_t* md_buf,
+            double backend_time,
+            rs2_time_t last_timestamp,
+            unsigned long long last_frame_number,
+            bool in_is_blocking)
+            : timestamp(in_timestamp),
+            frame_number(in_frame_number),
+            system_time(in_system_time),
+            metadata_size(md_size),
+            backend_timestamp(backend_time),
+            last_timestamp(last_timestamp),
+            last_frame_number(last_frame_number),
+            is_blocking(in_is_blocking)
+        {
+            // Copy up to 255 bytes to preserve metadata as raw data
+            if (metadata_size)
+                std::copy(md_buf, md_buf + std::min(md_size, MAX_META_DATA_SIZE), metadata_blob.begin());
+        }
+    };
+
+    class archive_interface : public sensor_part
+    {
+    public:
+        virtual callback_invocation_holder begin_callback() = 0;
+
+        virtual frame_interface* alloc_and_track(const size_t size, const frame_additional_data& additional_data, bool requires_memory) = 0;
+
+        virtual std::shared_ptr<metadata_parser_map> get_md_parsers() const = 0;
+
+        virtual void flush() = 0;
+
+        virtual frame_interface* publish_frame(frame_interface* frame) = 0;
+        virtual void unpublish_frame(frame_interface* frame) = 0;
+        virtual void keep_frame(frame_interface* frame) = 0;
+        virtual ~archive_interface() = default;
+    };
+
+    std::shared_ptr<archive_interface> make_archive(rs2_extension type,
+        std::atomic<uint32_t>* in_max_frame_queue_size,
+        std::shared_ptr<platform::time_service> ts,
+        std::shared_ptr<metadata_parser_map> parsers);
+
     // Define a movable but explicitly noncopyable buffer type to hold our frame data
-    class frame : public frame_interface
+    class LRS_EXTENSION_API frame : public frame_interface
     {
     public:
         std::vector<byte> data;
         frame_additional_data additional_data;
-
-        explicit frame() : ref_count(0), _kept(false), owner(nullptr), on_release(), _sensor_type(RS2_EXTENSION_UNKNOWN) {}
+        std::shared_ptr<metadata_parser_map> metadata_parsers = nullptr;
+        explicit frame() : ref_count(0), _kept(false), owner(nullptr), on_release() {}
         frame(const frame& r) = delete;
-        frame(frame&& r);
+        frame(frame&& r)
+            : ref_count(r.ref_count.exchange(0)), _kept(r._kept.exchange(false)),
+            owner(r.owner), on_release()
+        {
+            *this = std::move(r);
+            if (owner) metadata_parsers = owner->get_md_parsers();
+            if (r.metadata_parsers) metadata_parsers = std::move(r.metadata_parsers);
+        }
 
         frame& operator=(const frame& r) = delete;
-        frame& operator=(frame&& r);
+        frame& operator=(frame&& r)
+        {
+            data = move(r.data);
+            owner = r.owner;
+            ref_count = r.ref_count.exchange(0);
+            _kept = r._kept.exchange(false);
+            on_release = std::move(r.on_release);
+            additional_data = std::move(r.additional_data);
+            r.owner.reset();
+            if (owner) metadata_parsers = owner->get_md_parsers();
+            if (r.metadata_parsers) metadata_parsers = std::move(r.metadata_parsers);
+            return *this;
+        }
 
         virtual ~frame() { on_release.reset(); }
         rs2_metadata_type get_frame_metadata(const rs2_frame_metadata_value& frame_metadata) const override;
         bool supports_frame_metadata(const rs2_frame_metadata_value& frame_metadata) const override;
+        int get_frame_data_size() const override;
         const byte* get_frame_data() const override;
         rs2_time_t get_frame_timestamp() const override;
         rs2_timestamp_domain get_frame_timestamp_domain() const override;
         void set_timestamp(double new_ts) override { additional_data.timestamp = new_ts; }
         unsigned long long get_frame_number() const override;
-        std::array<uint8_t, MAX_META_DATA_SIZE> get_metadata_blob() const override;
         void set_timestamp_domain(rs2_timestamp_domain timestamp_domain) override
         {
             additional_data.timestamp_domain = timestamp_domain;
@@ -99,6 +148,7 @@ namespace librealsense
         void keep() override;
 
         frame_interface* publish(std::shared_ptr<archive_interface> new_owner) override;
+        void unpublish() override {}
         void attach_continuation(frame_continuation&& continuation) override { on_release = std::move(continuation); }
         void disable_continuation() override { on_release.reset(); }
 
@@ -114,6 +164,9 @@ namespace librealsense
         void mark_fixed() override { _fixed = true; }
         bool is_fixed() const override { return _fixed; }
 
+        void set_blocking(bool state) override { additional_data.is_blocking = state; }
+        bool is_blocking() const override { return additional_data.is_blocking; }
+
     private:
         // TODO: check boost::intrusive_ptr or an alternative
         std::atomic<int> ref_count; // the reference count is on how many times this placeholder has been observed (not lifetime, not content)
@@ -123,7 +176,6 @@ namespace librealsense
         bool _fixed = false;
         std::atomic_bool _kept;
         std::shared_ptr<stream_profile_interface> stream;
-        rs2_extension _sensor_type;
     };
 
     class points : public frame
@@ -178,6 +230,10 @@ namespace librealsense
         {
             return first()->supports_frame_metadata(frame_metadata);
         }
+        int get_frame_data_size() const override
+        {
+            return first()->get_frame_data_size();
+        }
         const byte* get_frame_data() const override
         {
             return first()->get_frame_data();
@@ -204,10 +260,6 @@ namespace librealsense
         std::shared_ptr<sensor_interface> get_sensor() const override
         {
             return first()->get_sensor();
-        }
-        std::array<uint8_t, MAX_META_DATA_SIZE> get_metadata_blob() const override
-        {
-            return first()->get_metadata_blob();
         }
     };
 
@@ -266,7 +318,7 @@ namespace librealsense
                 return((depth_frame*)_original.frame)->get_distance(x, y);
 
             uint64_t pixel = 0;
-            switch (get_bpp()/8) // bits per pixel
+            switch (get_bpp() / 8) // bits per pixel
             {
             case 1: pixel = get_frame_data()[y*get_width() + x];                                    break;
             case 2: pixel = reinterpret_cast<const uint16_t*>(get_frame_data())[y*get_width() + x]; break;
@@ -285,18 +337,6 @@ namespace librealsense
             return _depth_units.value();
         }
 
-        const frame_interface* get_original_depth() const
-        {
-            auto res = _original.frame;
-            auto df = dynamic_cast<depth_frame*>(res);
-            if (df)
-            {
-                auto prev = df->get_original_depth();
-                if (prev) return prev;
-            }
-            return res;
-        }
-
         void set_original(frame_holder h)
         {
             _original = std::move(h);
@@ -305,7 +345,7 @@ namespace librealsense
                 {
                     _original = {};
                 }
-            }, get_frame_data()));
+            }, nullptr));
         }
 
     protected:
@@ -316,7 +356,7 @@ namespace librealsense
                 try
                 {
                     auto depth_sensor = As<librealsense::depth_sensor>(sensor);
-                    if(depth_sensor != nullptr)
+                    if (depth_sensor != nullptr)
                     {
                         return depth_sensor->get_depth_scale();
                     }
@@ -435,41 +475,16 @@ namespace librealsense
 
         pose_frame() : frame() {}
 
-        float3   get_translation()          const { return reinterpret_cast<const pose_info*>(data.data())->translation; }
-        float3   get_velocity()             const { return reinterpret_cast<const pose_info*>(data.data())->velocity; }
-        float3   get_acceleration()         const { return reinterpret_cast<const pose_info*>(data.data())->acceleration; }
-        float4   get_rotation()             const { return reinterpret_cast<const pose_info*>(data.data())->rotation; }
-        float3   get_angular_velocity()     const { return reinterpret_cast<const pose_info*>(data.data())->angular_velocity; }
-        float3   get_angular_acceleration() const { return reinterpret_cast<const pose_info*>(data.data())->angular_acceleration; }
-        uint32_t get_tracker_confidence()   const { return reinterpret_cast<const pose_info*>(data.data())->tracker_confidence; }
-        uint32_t get_mapper_confidence()    const { return reinterpret_cast<const pose_info*>(data.data())->mapper_confidence; }
+        float3   get_translation()          const { return reinterpret_cast<const pose_info*>(get_frame_data())->translation; }
+        float3   get_velocity()             const { return reinterpret_cast<const pose_info*>(get_frame_data())->velocity; }
+        float3   get_acceleration()         const { return reinterpret_cast<const pose_info*>(get_frame_data())->acceleration; }
+        float4   get_rotation()             const { return reinterpret_cast<const pose_info*>(get_frame_data())->rotation; }
+        float3   get_angular_velocity()     const { return reinterpret_cast<const pose_info*>(get_frame_data())->angular_velocity; }
+        float3   get_angular_acceleration() const { return reinterpret_cast<const pose_info*>(get_frame_data())->angular_acceleration; }
+        uint32_t get_tracker_confidence()   const { return reinterpret_cast<const pose_info*>(get_frame_data())->tracker_confidence; }
+        uint32_t get_mapper_confidence()    const { return reinterpret_cast<const pose_info*>(get_frame_data())->mapper_confidence; }
     };
 
     MAP_EXTENSION(RS2_EXTENSION_POSE_FRAME, librealsense::pose_frame);
-
-
-    class archive_interface : public sensor_part
-    {
-    public:
-        virtual callback_invocation_holder begin_callback() = 0;
-
-        virtual frame_interface* alloc_and_track(const size_t size, const frame_additional_data& additional_data, bool requires_memory) = 0;
-
-        virtual std::shared_ptr<metadata_parser_map> get_md_parsers(rs2_extension sensor_type) const = 0;
-
-        virtual void set_md_parsers(const rs2_extension sensor_type, const std::shared_ptr<metadata_parser_map> metadata_parsers) = 0;
-
-        virtual void flush() = 0;
-
-        virtual frame_interface* publish_frame(frame_interface* frame) = 0;
-        virtual void unpublish_frame(frame_interface* frame) = 0;
-        virtual void keep_frame(frame_interface* frame) = 0;
-        virtual ~archive_interface() = default;
-
-    };
-
-    std::shared_ptr<archive_interface> make_archive(rs2_extension type,
-                                                    std::atomic<uint32_t>* in_max_frame_queue_size,
-                                                    std::shared_ptr<platform::time_service> ts,
-                                                    std::map<rs2_extension, std::shared_ptr<metadata_parser_map>> parsers);
+ 
 }

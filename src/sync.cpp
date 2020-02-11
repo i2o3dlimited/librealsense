@@ -357,7 +357,8 @@ namespace librealsense
                 for (auto index : synced_frames)
                 {
                     frame_holder frame;
-                    _frames_queue[index].dequeue(&frame);
+                    int timeout_ms = 5000;
+                    _frames_queue[index].dequeue(&frame, timeout_ms);
                     if (old_frames)
                     {
                         s  << "--> " << frame_to_string(frame) << "\n";
@@ -532,6 +533,8 @@ namespace librealsense
 
     void timestamp_composite_matcher::clean_inactive_streams(frame_holder& f)
     {
+        if (f.is_blocking())
+            return;
         std::vector<stream_id> dead_matchers;
         auto now = environment::get_instance().get_time_service()->get_time();
         for(auto m: _matchers)

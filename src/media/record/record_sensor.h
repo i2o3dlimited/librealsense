@@ -18,11 +18,11 @@ namespace librealsense
                           public options_container
     {
     public:
-        record_sensor(const device_interface& device,
+        record_sensor(device_interface& device,
                       sensor_interface& sensor);
         virtual ~record_sensor();
         void init();
-        stream_profiles get_stream_profiles() const override;
+        stream_profiles get_stream_profiles(int tag = profile_tag::PROFILE_TAG_ANY) const override;
         void open(const stream_profiles& requests) override;
         void close() override;
         option& get_option(rs2_option id) override;
@@ -36,18 +36,19 @@ namespace librealsense
         void stop() override;
         bool is_streaming() const override;
         bool extend_to(rs2_extension extension_type, void** ext) override;
-        const device_interface& get_device() override;
+        device_interface& get_device() override;
         frame_callback_ptr get_frames_callback() const override;
         void set_frames_callback(frame_callback_ptr callback) override;
         stream_profiles get_active_streams() const override;
         int register_before_streaming_changes_callback(std::function<void(bool)> callback) override;
         void unregister_before_start_callback(int token) override;
-        virtual rs2_extension get_sensor_type() override;
         signal<record_sensor, const notification&> on_notification;
         signal<record_sensor, frame_holder> on_frame;
         signal<record_sensor, rs2_extension, std::shared_ptr<extension_snapshot>> on_extension_change;
         void stop_with_error(const std::string& message);
         void disable_recording();
+        virtual processing_blocks get_recommended_processing_blocks() const override;
+
     private /*methods*/:
         template <typename T> void record_snapshot(rs2_extension extension_type, const  recordable<T>& snapshot);
         template <rs2_extension E, typename P> bool extend_to_aux(P* p, void** ext);
@@ -70,7 +71,7 @@ namespace librealsense
         frame_callback_ptr m_frame_callback;
         frame_callback_ptr m_original_callback;
         int m_before_start_callback_token;
-        const device_interface& m_parent_device;
+        device_interface& m_parent_device;
         bool m_is_sensor_hooked;
         std::mutex m_mutex;
     };

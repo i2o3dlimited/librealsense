@@ -47,7 +47,7 @@ namespace librealsense
               _ts(environment::get_instance().get_time_service())
     {}
 
-    void frame_source::init(std::map<rs2_extension, std::shared_ptr<metadata_parser_map>> metadata_parsers)
+    void frame_source::init(std::shared_ptr<metadata_parser_map> metadata_parsers)
     {
         std::lock_guard<std::mutex> lock(_callback_mutex);
 
@@ -63,6 +63,8 @@ namespace librealsense
         {
             _archive[type] = make_archive(type, &_max_publish_list_size, _ts, metadata_parsers);
         }
+
+        _metadata_parsers = metadata_parsers;
     }
 
     callback_invocation_holder frame_source::begin_callback()
@@ -79,6 +81,7 @@ namespace librealsense
         {
             kvp.second.reset();
         }
+        _metadata_parsers.reset();
     }
 
     frame_interface* frame_source::alloc_frame(rs2_extension type, size_t size, frame_additional_data additional_data, bool requires_memory) const
@@ -88,7 +91,7 @@ namespace librealsense
         return it->second->alloc_and_track(size, additional_data, requires_memory);
     }
 
-    void frame_source::set_sensor(std::shared_ptr<sensor_interface> s)
+    void frame_source::set_sensor(const std::shared_ptr<sensor_interface>& s)
     {
         for (auto&& a : _archive)
         {

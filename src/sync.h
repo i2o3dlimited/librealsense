@@ -58,7 +58,7 @@ namespace librealsense
     {
         synthetic_source_interface* source;
         //sync_lock& lock_ref;
-        single_consumer_queue<frame_holder>& matches;
+        single_consumer_frame_queue<frame_holder>& matches;
     };
 
     typedef int stream_id;
@@ -79,15 +79,15 @@ namespace librealsense
     {
     public:
         matcher(std::vector<stream_id> streams_id = {});
-        virtual void sync(frame_holder f, syncronization_environment env);
-        virtual void set_callback(sync_callback f);
+        virtual void sync(frame_holder f, syncronization_environment env) override;
+        virtual void set_callback(sync_callback f) override;
         const std::vector<stream_id>& get_streams() const override;
         const std::vector<rs2_stream>& get_streams_types() const override;
 
         callback_invocation_holder begin_callback();
         virtual ~matcher();
 
-        virtual std::string get_name() const;
+        virtual std::string get_name() const override;
         bool get_active() const;
         void set_active(const bool active);
 
@@ -129,7 +129,7 @@ namespace librealsense
     protected:
         virtual void update_next_expected(const frame_holder& f) = 0;
 
-        std::map<matcher*, single_consumer_queue<frame_holder>> _frames_queue;
+        std::map<matcher*, single_consumer_frame_queue<frame_holder>> _frames_queue;
         std::map<stream_id, std::shared_ptr<matcher>> _matchers;
         std::map<matcher*, double> _next_expected;
         std::map<matcher*, rs2_timestamp_domain> _next_expected_domain;

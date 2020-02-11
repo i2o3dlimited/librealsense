@@ -5,11 +5,12 @@
 
 #include "../include/librealsense2/hpp/rs_frame.hpp"
 #include "../include/librealsense2/hpp/rs_processing.hpp"
+#include "proc/synthetic-stream.h"
 
 namespace librealsense
 {
 
-    class decimation_filter : public processing_block
+    class decimation_filter : public stream_filter_processing_block
     {
     public:
         decimation_filter();
@@ -22,6 +23,7 @@ namespace librealsense
 
         void decimate_others(rs2_format format, const void * frame_data_in, void * frame_data_out,
             size_t width_in, size_t height_in, size_t scale);
+        rs2::frame process_frame(const rs2::frame_source& source, const rs2::frame& f) override;
 
     private:
         void    update_output_profile(const rs2::frame& f);
@@ -40,4 +42,5 @@ namespace librealsense
         bool                    _recalc_profile;
         bool                    _options_changed;   // Tracking changes imposed by user
     };
+    MAP_EXTENSION(RS2_EXTENSION_DECIMATION_FILTER, librealsense::decimation_filter);
 }
